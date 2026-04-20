@@ -106,14 +106,17 @@ export default function Register() {
         {role === 'doctor' && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Specialization</label>
-            <input 
-              type="text" 
+            <select
               required={role === 'doctor'}
-              placeholder="e.g. Cardiologist, Dermatologist"
-              className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-hospital-red/50"
+              className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-hospital-red/50 bg-white"
               value={specialization}
               onChange={(e) => setSpecialization(e.target.value)}
-            />
+            >
+              <option value="" disabled>Select a Specialization</option>
+              {['General Physician', 'Cardiologist', 'Dermatologist', 'Pediatrician', 'Neurologist', 'Psychiatrist', 'Orthopedic Surgeon', 'Gynecologist', 'Dentist', 'ENT Specialist'].map(spec => (
+                <option key={spec} value={spec}>{spec}</option>
+              ))}
+            </select>
           </div>
         )}
         <button 

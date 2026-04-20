@@ -267,7 +267,12 @@ function PatientRequests({ doctorId }) {
     const q = query(collection(db, 'appointments'), where('doctorId', '==', doctorId));
     const querySnapshot = await getDocs(q);
     const data = [];
-    querySnapshot.forEach((doc) => data.push({ id: doc.id, ...doc.data() }));
+    querySnapshot.forEach((doc) => {
+      const app = { id: doc.id, ...doc.data() };
+      if (!['completed', 'cancelled', 'rejected'].includes(app.status)) {
+        data.push(app);
+      }
+    });
     setRequests(data);
   }
 

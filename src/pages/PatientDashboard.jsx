@@ -5,6 +5,19 @@ import { db } from '../services/firebase';
 import { collection, getDocs, addDoc, updateDoc, doc, query, where, deleteDoc } from 'firebase/firestore';
 import { ShoppingCart, Search, X, Plus, Minus } from 'lucide-react';
 
+// Time Math Helpers
+function timeToMinutes(timeStr) {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minutesToTime(mins) {
+  const h = Math.floor(mins / 60).toString().padStart(2, '0');
+  const m = (mins % 60).toString().padStart(2, '0');
+  return `${h}:${m}`;
+}
+
 export default function PatientDashboard() {
   const { user } = useAuth();
   const [activeView, setActiveView] = useState('overview');
@@ -32,7 +45,7 @@ export default function PatientDashboard() {
 
       {activeView === 'overview' && <Overview setView={setActiveView} />}
       {activeView === 'doctors' && <FindDoctor user={user} />}
-      {activeView === 'appointments' && <MyAppointments userId={user?.uid} />}
+      {activeView === 'appointments' && <MyAppointments user={user} />}
       {activeView === 'services' && <MedicalServices user={user} />}
       {activeView === 'purchases' && <MyPurchases userId={user?.uid} />}
     </div>
@@ -83,9 +96,16 @@ function DashboardCard({ title, desc, action, onClick }) {
 
 function FindDoctor({ user }) {
   const [doctors, setDoctors] = useState([]);
-  const [slots, setSlots] = useState({});
-  const [loading, setLoading] = useState({});
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  
+  // Booking Modal States
+  const [bookingDoctor, setBookingDoctor] = useState(null);
+  const [next7Days, setNext7Days] = useState([]);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [availableSlots, setAvailableSlots] = useState([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [bookingTime, setBookingTime] = useState('');
 
   useEffect(() => {
     async function fetchDoctors() {
@@ -93,116 +113,255 @@ function FindDoctor({ user }) {
       const querySnapshot = await getDocs(q);
       const docsData = [];
       querySnapshot.forEach((doc) => docsData.push({ id: doc.id, ...doc.data() }));
-      setDoctors(docsData);
-
-      // Fetch slots for all doctors
-      const slotsData = {};
-      for (const doctor of docsData) {
-        const slotsQ = query(collection(db, 'slots'), where('doctorId', '==', doctor.id), where('isBooked', '==', false));
-        const slotSnap = await getDocs(slotsQ);
-        slotsData[doctor.id] = [];
-        slotSnap.forEach((doc) => slotsData[doctor.id].push({ id: doc.id, ...doc.data() }));
-      }
-      setSlots(slotsData);
+      // Generate preview availability text per doctor
+      const formatted = docsData.map(doc => {
+        let availText = "No specific availability set.";
+        if (doc.availability) {
+          const actives = Object.keys(doc.availability).filter(d => doc.availability[d].enabled);
+          if (actives.length > 0) {
+            availText = `Available on: ${actives.join(', ')}`;
+          }
+        }
+        return { ...doc, availText };
+      });
+      setDoctors(formatted);
     }
     fetchDoctors();
   }, []);
 
-  async function handleBookSlot(doctor, slot) {
-    setLoading({ ...loading, [slot.id]: true });
+  function generateNext7Days(doctor) {
+    const next7 = [];
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const avail = doctor.availability;
+
+    for(let i=0; i<7; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        const dayStr = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+        
+        // Skip formatting if no availability data
+        if (!avail) break;
+
+        let available = false;
+        let timeRange = 'Closed';
+        if (avail[dayStr] && avail[dayStr].enabled) {
+            available = true;
+            timeRange = `${avail[dayStr].start} - ${avail[dayStr].end}`;
+        }
+        
+        if (available) {
+            next7.push({
+                full: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+                display: `${dayStr}, ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+                dayName: dayStr,
+                timeRange
+            });
+        }
+    }
+    return next7;
+  }
+
+  function openBookingModal(doctor) {
+    setBookingDoctor(doctor);
+    setNext7Days(generateNext7Days(doctor));
+    setSelectedDate('');
+    setBookingTime('');
+    setAvailableSlots([]);
+    setMessage('');
+  }
+
+  async function handleSelectDate(dateStr) {
+    setSelectedDate(dateStr);
+    setBookingTime('');
+    setLoadingSlots(true);
+    
+    try {
+      // 1. Fetch booked appointments
+      const q = query(collection(db, 'appointments'), where('doctorId', '==', bookingDoctor.id), where('date', '==', dateStr));
+      const snap = await getDocs(q);
+      const bookedTimes = [];
+      snap.forEach(doc => {
+          const data = doc.data();
+          if (data.status !== 'cancelled' && data.status !== 'rejected') {
+              bookedTimes.push(data.time);
+          }
+      });
+      
+      // 2. Generate intervals
+      const day = new Date(dateStr).getDay();
+      const dayStr = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day];
+      const config = bookingDoctor.availability[dayStr];
+      const startMins = timeToMinutes(config.start);
+      const endMins = timeToMinutes(config.end);
+      const slotDuration = bookingDoctor.slotDuration || 30; // fallback to 30 mins
+      
+      const intervals = [];
+      for (let currentMins = startMins; currentMins + slotDuration <= endMins; currentMins += slotDuration) {
+          const timeString = minutesToTime(currentMins);
+          if (!bookedTimes.includes(timeString)) {
+              intervals.push(timeString);
+          }
+      }
+      setAvailableSlots(intervals);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load slots.');
+    }
+    setLoadingSlots(false);
+  }
+
+  async function handleConfirmBooking() {
+    if (!bookingTime) return;
+    setLoading(true);
     try {
       await addDoc(collection(db, 'appointments'), {
         patientId: user.uid,
         patientName: user.name,
-        doctorId: doctor.id,
-        doctorName: doctor.name,
-        date: slot.date,
-        time: slot.time,
-        fee: slot.fee,
+        doctorId: bookingDoctor.id,
+        doctorName: bookingDoctor.name,
+        date: selectedDate,
+        time: bookingTime,
+        fee: bookingDoctor.consultationFee || 0,
         status: 'pending' 
       });
-
-      await updateDoc(doc(db, 'slots', slot.id), {
-        isBooked: true
-      });
-
-      setMessage(`Successfully booked ${doctor.name} for ${slot.date} at ${slot.time}!`);
       
-      setSlots(prev => ({
-        ...prev,
-        [doctor.id]: prev[doctor.id].filter(s => s.id !== slot.id)
-      }));
+      toast.success(`Successfully booked ${bookingDoctor.name} for ${selectedDate} at ${bookingTime}!`);
+      setBookingDoctor(null);
     } catch (err) {
       console.error(err);
-      setMessage("Failed to book slot.");
+      toast.error("Failed to book appointment.");
     }
-    setLoading({ ...loading, [slot.id]: false });
+    setLoading(false);
   }
 
   return (
-    <div className="glass p-6 rounded-2xl">
-      <h2 className="text-xl font-bold mb-4">Available Doctors & Slots</h2>
-      {message && <div className="bg-hospital-light text-hospital-red p-4 rounded-md mb-6 font-medium">{message}</div>}
+    <div className="glass p-6 rounded-2xl relative">
+      <h2 className="text-xl font-bold mb-6">Available Doctors</h2>
       
-      <div className="space-y-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
         {doctors.map(doc => (
-          <div key={doc.id} className="p-5 bg-white rounded-xl border border-gray-100 shadow-sm">
-            <h3 className="font-bold text-lg text-hospital-dark">Dr. {doc.name}</h3>
-            <p className="text-hospital-red font-medium text-sm mb-4">{doc.specialization || 'General Practitioner'}</p>
-            
-            <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {slots[doc.id] && slots[doc.id].length > 0 ? (
-                slots[doc.id].map(slot => (
-                  <div key={slot.id} className="border border-green-200 bg-green-50 rounded-lg p-3 flex flex-col justify-between">
-                    <div>
-                      <p className="font-semibold text-sm">{slot.date}</p>
-                      <p className="text-xs text-gray-600">{slot.time} • ₹{slot.fee}</p>
-                    </div>
-                    <button 
-                      disabled={loading[slot.id]}
-                      onClick={() => handleBookSlot(doc, slot)}
-                      className="mt-3 bg-hospital-red text-white text-xs py-1.5 rounded disabled:opacity-50 hover:bg-hospital-darkred"
-                    >
-                      {loading[slot.id] ? 'Booking...' : 'Book Now'}
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-gray-500 italic">No available slots at the moment.</p>
-              )}
+          <div key={doc.id} className="p-5 bg-white rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between hover:-translate-y-1 transition-transform">
+            <div>
+              <h3 className="font-bold text-lg text-hospital-dark">Dr. {doc.name}</h3>
+              <p className="text-hospital-red font-medium text-sm mb-2">{doc.specialization || 'General Practitioner'}</p>
+              <p className="text-gray-500 text-xs mb-1 font-medium">{doc.availText}</p>
+              <p className="text-hospital-dark font-bold text-sm mb-4">Consultation Fee: ₹{doc.consultationFee || 'Not Set'}</p>
             </div>
+            
+            <button 
+              onClick={() => openBookingModal(doc)}
+              disabled={!doc.availability}
+              className="w-full bg-hospital-light text-hospital-dark font-semibold text-sm py-2 rounded-lg hover:bg-hospital-red hover:text-white transition-colors disabled:opacity-50 border border-gray-200"
+            >
+              {doc.availability ? 'Book Appointment' : 'No Schedule Setup'}
+            </button>
           </div>
         ))}
       </div>
+
+      {bookingDoctor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setBookingDoctor(null)}></div>
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-2xl p-6 animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="text-xl font-bold text-hospital-dark">Book Appointment with Dr. {bookingDoctor.name}</h3>
+                <p className="text-sm text-hospital-red font-semibold">Consultation Fee: ₹{bookingDoctor.consultationFee || 0} • Slot Duration: {bookingDoctor.slotDuration || 30} mins</p>
+              </div>
+              <button onClick={() => setBookingDoctor(null)} className="text-gray-400 hover:text-black">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="space-y-6 mt-6">
+              {next7Days.length === 0 ? (
+                <div className="p-4 bg-orange-50 text-orange-700 rounded-lg text-sm font-medium">Doctor has not set any active days in their availability.</div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Select Date (Next 7 Active Days)</label>
+                    <div className="flex flex-wrap gap-2">
+                      {next7Days.map(d => (
+                        <button 
+                          key={d.full} 
+                          onClick={() => handleSelectDate(d.full)}
+                          className={`px-3 py-2 text-sm rounded-lg font-medium border transition-colors ${selectedDate === d.full ? 'bg-hospital-red text-white border-hospital-red' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                        >
+                          {d.display}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedDate && (
+                    <div className="animate-in fade-in slide-in-from-top-2">
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Select Time Slot ({next7Days.find(d => d.full === selectedDate)?.timeRange})</label>
+                      {loadingSlots ? (
+                        <p className="text-sm text-gray-500">Loading availability...</p>
+                      ) : availableSlots.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {availableSlots.map(time => (
+                            <button
+                               key={time}
+                               onClick={() => setBookingTime(time)}
+                               className={`px-3 py-1.5 text-sm rounded-lg border font-medium transition-colors ${bookingTime === time ? 'bg-hospital-dark text-white border-hospital-dark' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'}`}
+                            >
+                               {time}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm font-medium border border-red-100">All slots are booked for this date! Try another day.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {bookingTime && (
+                    <div className="pt-4 border-t border-gray-100 mt-6 flex justify-end gap-3">
+                      <button onClick={() => setBookingDoctor(null)} className="px-4 py-2 font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm">Cancel</button>
+                      <button disabled={loading} onClick={handleConfirmBooking} className="px-4 py-2 font-bold text-white bg-hospital-red hover:bg-hospital-darkred rounded-lg shadow-sm text-sm disabled:opacity-50">
+                        {loading ? 'Confirming...' : 'Confirm Request'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function MyAppointments({ userId }) {
+function MyAppointments({ user }) {
   const [appointments, setAppointments] = useState([]);
-  const [reschedulingAppId, setReschedulingAppId] = useState(null);
-  const [rescheduleSlots, setRescheduleSlots] = useState([]);
+  
+  // Reschedule States
+  const [rescheduleData, setRescheduleData] = useState(null);
+  const [next7Days, setNext7Days] = useState([]);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [availableSlots, setAvailableSlots] = useState([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [bookingTime, setBookingTime] = useState('');
   const [loadingReschedule, setLoadingReschedule] = useState(false);
 
   useEffect(() => {
     async function fetchAppointments() {
-      if (!userId) return;
-      const q = query(collection(db, 'appointments'), where('patientId', '==', userId));
+      if (!user?.uid) return;
+      const q = query(collection(db, 'appointments'), where('patientId', '==', user.uid));
       const querySnapshot = await getDocs(q);
       const data = [];
       querySnapshot.forEach((doc) => data.push({ id: doc.id, ...doc.data() }));
-      setAppointments(data);
+      // Sort desc
+      setAppointments(data.sort((a,b) => new Date(b.date) - new Date(a.date)));
     }
     fetchAppointments();
-  }, [userId]);
+  }, [user]);
 
   async function handleUnbook(app) {
     try {
-      const slotQ = query(collection(db, 'slots'), where('doctorId', '==', app.doctorId), where('date', '==', app.date), where('time', '==', app.time));
-      const slotSnap = await getDocs(slotQ);
-      for (const slotDoc of slotSnap.docs) {
-        await updateDoc(doc(db, 'slots', slotDoc.id), { isBooked: false });
-      }
       await updateDoc(doc(db, 'appointments', app.id), { status: 'cancelled' });
       setAppointments(prev => prev.map(a => a.id === app.id ? { ...a, status: 'cancelled' } : a));
     } catch (err) {
@@ -211,49 +370,104 @@ function MyAppointments({ userId }) {
   }
 
   async function handleOpenReschedule(app) {
-    if (reschedulingAppId === app.id) {
-       setReschedulingAppId(null);
-       return;
+    // We need to fetch the doctor's document to get their availability settings dynamically
+    const docQ = query(collection(db, 'users'), where('uid', '==', app.doctorId));
+    const docSnap = await getDocs(docQ);
+    let doctorData = null;
+    docSnap.forEach(d => { doctorData = { id: d.id, ...d.data() } });
+    
+    if (!doctorData || !doctorData.availability) {
+      toast.error("Doctor's availability setup is missing. Cannot reschedule right now.");
+      return;
     }
-    setReschedulingAppId(app.id);
-    setLoadingReschedule(true);
-    try {
-      const q = query(collection(db, 'slots'), where('doctorId', '==', app.doctorId), where('isBooked', '==', false));
-      const querySnapshot = await getDocs(q);
-      const data = [];
-      querySnapshot.forEach(doc => data.push({id: doc.id, ...doc.data()}));
-      setRescheduleSlots(data.sort((a,b) => new Date(a.date) - new Date(b.date)));
-    } catch (e) {
-      console.error(e);
+
+    setRescheduleData({ app, doctor: doctorData });
+    setNext7Days(generateNext7Days(doctorData));
+    setSelectedDate('');
+    setBookingTime('');
+    setAvailableSlots([]);
+  }
+  
+  function generateNext7Days(doctor) {
+    const next7 = [];
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const avail = doctor.availability;
+    for(let i=0; i<7; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        const dayStr = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+        if (avail[dayStr] && avail[dayStr].enabled) {
+            next7.push({
+                full: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+                display: `${dayStr}, ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+                timeRange: `${avail[dayStr].start} - ${avail[dayStr].end}`
+            });
+        }
     }
-    setLoadingReschedule(false);
+    return next7;
   }
 
-  async function handleConfirmReschedule(app, newSlot) {
+  async function handleSelectRescheduleDate(dateStr) {
+    setSelectedDate(dateStr);
+    setBookingTime('');
+    setLoadingSlots(true);
+    
     try {
-       // Free old slot
-       const oldSlotQ = query(collection(db, 'slots'), where('doctorId', '==', app.doctorId), where('date', '==', app.date), where('time', '==', app.time));
-       const oldSlotSnap = await getDocs(oldSlotQ);
-       for (const slotDoc of oldSlotSnap.docs) {
-         await updateDoc(doc(db, 'slots', slotDoc.id), { isBooked: false });
-       }
-       // Reserve new slot
-       await updateDoc(doc(db, 'slots', newSlot.id), { isBooked: true });
-       // Update appt
-       await updateDoc(doc(db, 'appointments', app.id), {
-          date: newSlot.date,
-          time: newSlot.time,
-          fee: newSlot.fee,
+      const q = query(collection(db, 'appointments'), where('doctorId', '==', rescheduleData.doctor.id), where('date', '==', dateStr));
+      const snap = await getDocs(q);
+      const bookedTimes = [];
+      snap.forEach(doc => {
+          const data = doc.data();
+          if (data.status !== 'cancelled' && data.status !== 'rejected') {
+              bookedTimes.push(data.time);
+          }
+      });
+      
+      const day = new Date(dateStr).getDay();
+      const dayStr = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day];
+      const config = rescheduleData.doctor.availability[dayStr];
+      const startMins = timeToMinutes(config.start);
+      const endMins = timeToMinutes(config.end);
+      const slotDuration = rescheduleData.doctor.slotDuration || 30; 
+      
+      const intervals = [];
+      for (let currentMins = startMins; currentMins + slotDuration <= endMins; currentMins += slotDuration) {
+          const timeString = minutesToTime(currentMins);
+          // Allow reserving their OWN current time slot
+          if (!bookedTimes.includes(timeString) || (timeString === rescheduleData.app.time && dateStr === rescheduleData.app.date)) {
+              intervals.push(timeString);
+          }
+      }
+      setAvailableSlots(intervals);
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to load slots.');
+    }
+    setLoadingSlots(false);
+  }
+
+  async function handleConfirmReschedule() {
+    if (!bookingTime) return;
+    setLoadingReschedule(true);
+    try {
+       await updateDoc(doc(db, 'appointments', rescheduleData.app.id), {
+          date: selectedDate,
+          time: bookingTime,
+          fee: rescheduleData.doctor.consultationFee,
           status: 'pending'
        });
        
        setAppointments(prev => prev.map(a => 
-         a.id === app.id ? { ...a, date: newSlot.date, time: newSlot.time, fee: newSlot.fee, status: 'pending' } : a
+         a.id === rescheduleData.app.id ? { ...a, date: selectedDate, time: bookingTime, fee: rescheduleData.doctor.consultationFee, status: 'pending' } : a
        ));
-       setReschedulingAppId(null);
+       toast.success("Successfully rescheduled appointment.");
+       setRescheduleData(null);
     } catch (e) { 
        console.error(e); 
+       toast.error("Error rescheduling.");
     }
+    setLoadingReschedule(false);
   }
 
   return (
@@ -286,27 +500,58 @@ function MyAppointments({ userId }) {
               </div>
             </div>
 
-            {reschedulingAppId === app.id && (
+            {rescheduleData?.app.id === app.id && (
               <div className="mt-2 bg-gray-50 p-4 border border-gray-200 rounded-lg animate-in slide-in-from-top-2">
-                <h4 className="text-sm font-bold text-hospital-dark mb-3">Select a New Time Slot for Dr. {app.doctorName}</h4>
-                {loadingReschedule ? (
-                   <p className="text-sm text-gray-500">Loading available slots...</p>
-                ) : rescheduleSlots.length > 0 ? (
-                   <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-                     {rescheduleSlots.map(slot => (
-                       <button 
-                         key={slot.id} 
-                         onClick={() => handleConfirmReschedule(app, slot)}
-                         className="text-left border border-hospital-red/30 bg-white hover:bg-hospital-red hover:text-white transition-colors rounded-lg p-3 group"
-                       >
-                         <p className="font-semibold text-sm">{slot.date}</p>
-                         <p className="text-xs text-gray-600 group-hover:text-red-100">{slot.time} • ₹{slot.fee}</p>
-                       </button>
-                     ))}
-                   </div>
-                ) : (
-                   <p className="text-sm text-orange-600 font-medium">No other slots are currently available for this doctor.</p>
-                )}
+                <div className="flex justify-between items-start mb-4">
+                  <h4 className="text-sm font-bold text-hospital-dark mb-3">Reschedule Dr. {app.doctorName}</h4>
+                  <button onClick={() => setRescheduleData(null)} className="text-gray-400 hover:text-black">
+                    <X size={18} />
+                  </button>
+                </div>
+                
+                <div>
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {next7Days.map(d => (
+                        <button 
+                          key={d.full} 
+                          onClick={() => handleSelectRescheduleDate(d.full)}
+                          className={`px-3 py-1.5 text-xs rounded-lg font-medium border transition-colors ${selectedDate === d.full ? 'bg-hospital-red text-white border-hospital-red' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                        >
+                          {d.display}
+                        </button>
+                      ))}
+                    </div>
+
+                    {selectedDate && (
+                      <div className="animate-in fade-in">
+                        {loadingSlots ? (
+                          <p className="text-xs text-gray-500">Loading availability...</p>
+                        ) : availableSlots.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {availableSlots.map(time => (
+                              <button
+                                 key={time}
+                                 onClick={() => setBookingTime(time)}
+                                 className={`px-3 py-1 text-xs rounded-lg border font-medium transition-colors ${bookingTime === time ? 'bg-hospital-dark text-white border-hospital-dark' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'}`}
+                              >
+                                 {time}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="p-2 bg-red-50 text-red-700 rounded-lg text-xs font-medium border border-red-100">All slots are booked.</div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {bookingTime && (
+                       <div className="mt-4 flex justify-end">
+                          <button disabled={loadingReschedule} onClick={handleConfirmReschedule} className="px-3 py-1.5 font-bold text-white bg-hospital-red hover:bg-hospital-darkred rounded flex items-center text-xs shadow disabled:opacity-50">
+                            Confirm Reschedule
+                          </button>
+                       </div>
+                    )}
+                </div>
               </div>
             )}
           </div>
@@ -343,7 +588,6 @@ function MedicalServices({ user }) {
     });
     
     // FAKE API DUMMY DATA SEEDING
-    // If the database is completely empty, act as a Fake API and auto-generate inventory
     if (data.length === 0) {
       const fakeApiData = [
         { name: 'Paracetamol 500mg', category: 'medicine', price: 5, stock: 100, description: 'Fever and pain relief' },
@@ -426,7 +670,6 @@ function MedicalServices({ user }) {
     setLoading(true);
     try {
       for (const item of cart) {
-        // Deduct specifically purchased quantity from database inventory
         const newStock = item.stock - item.qty;
         await updateDoc(doc(db, 'medicines', item.id), {
           stock: newStock
@@ -446,7 +689,7 @@ function MedicalServices({ user }) {
       toast.success('Order placed successfully!');
       setCart([]);
       setShowCart(false);
-      fetchMedicines(); // Refresh stock immediately
+      fetchMedicines(); 
     } catch (err) {
       console.error(err);
       setCheckoutStatus('Failed to process checkout.');
@@ -534,12 +777,11 @@ function MedicalServices({ user }) {
         ))}
         {!loading && displayShop.length === 0 && (
           <div className="col-span-full text-center py-12 bg-white/50 rounded-xl">
-            <p className="text-lg text-gray-500">No items match your search criteria.</p>
+             <p className="text-lg text-gray-500">No items match your search criteria.</p>
           </div>
         )}
       </div>
 
-      {/* Cart Modal/Sidebar overlay */}
       {showCart && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowCart(false)}></div>
@@ -614,7 +856,6 @@ function MyPurchases({ userId }) {
         const snap = await getDocs(q);
         const data = [];
         snap.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-        // Sort descending by date
         data.sort((a,b) => new Date(b.date) - new Date(a.date));
         setPurchases(data);
       } catch (err) {

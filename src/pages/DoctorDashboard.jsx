@@ -465,11 +465,11 @@ function ConsultationHistory({ doctorId }) {
     const data = [];
     querySnapshot.forEach((doc) => {
       const app = { id: doc.id, ...doc.data() };
-      if (app.status === 'accepted' || app.status === 'completed') {
+      if (['accepted', 'completed', 'cancelled', 'rejected'].includes(app.status)) {
         data.push(app);
       }
     });
-    setHistory(data);
+    setHistory(data.sort((a,b) => new Date(b.date) - new Date(a.date)));
   }
 
   async function handleCancel(app) {
@@ -479,7 +479,7 @@ function ConsultationHistory({ doctorId }) {
       for (const slotDoc of slotSnap.docs) {
         await updateDoc(doc(db, 'slots', slotDoc.id), { isBooked: false });
       }
-      await deleteDoc(doc(db, 'appointments', app.id));
+      await updateDoc(doc(db, 'appointments', app.id), { status: 'cancelled' });
       fetchHistory();
     } catch (err) {
       console.error(err);
@@ -487,8 +487,8 @@ function ConsultationHistory({ doctorId }) {
   }
 
   async function handleComplete(app) {
-    const diagnosis = window.prompt("Enter Diagnosis for the patient:");
-    if (!diagnosis) return;
+    const defaultDiagnosis = "General Consultation";
+    const diagnosis = window.prompt("Enter Diagnosis for the patient:", defaultDiagnosis) || defaultDiagnosis;
     const prescription = window.prompt("Enter Prescription (optional):") || "No prescription needed.";
 
     try {
@@ -513,11 +513,11 @@ function ConsultationHistory({ doctorId }) {
       <h2 className="text-xl font-bold mb-4">Consultation History</h2>
       <div className="space-y-4">
         {history.map(app => (
-          <div key={app.id} className="p-4 bg-white rounded-lg border border-green-200 border-l-4 border-l-green-500 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+          <div key={app.id} className={`p-4 bg-white rounded-lg border-l-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 ${app.status === 'completed' ? 'border-l-blue-500 border-gray-200' : ['cancelled', 'rejected'].includes(app.status) ? 'border-l-red-500 border-red-100 opacity-80' : 'border-l-green-500 border-green-200'}`}>
             <div>
               <p className="font-bold text-hospital-dark">{app.patientName}</p>
               <p className="text-sm text-gray-600">Consultation Slot: {app.date} at {app.time}</p>
-              <p className="text-xs font-semibold mt-1 text-green-600 uppercase">{app.status === 'accepted' ? 'In Progress' : app.status}</p>
+              <p className={`text-xs font-semibold mt-1 uppercase ${['cancelled', 'rejected'].includes(app.status) ? 'text-red-600' : app.status === 'completed' ? 'text-blue-600' : 'text-green-600'}`}>{app.status === 'accepted' ? 'In Progress' : app.status}</p>
               {app.status === 'completed' && app.diagnosis && (
                 <div className="mt-2 bg-gray-50 p-3 rounded-lg text-sm border border-gray-100">
                   <p className="mb-1"><span className="font-semibold text-hospital-dark">Diagnosis:</span> {app.diagnosis}</p>
@@ -533,7 +533,7 @@ function ConsultationHistory({ doctorId }) {
             </div>
             <div className="text-right">
               <p className="font-bold text-hospital-dark">₹{app.fee}</p>
-              <p className="text-xs text-gray-500">{app.status === 'completed' ? 'Paid / Settled' : 'Pending Payment'}</p>
+              <p className="text-xs text-gray-500">{app.status === 'completed' ? 'Paid / Settled' : ['cancelled', 'rejected'].includes(app.status) ? 'Cancelled' : 'Pending Payment'}</p>
             </div>
           </div>
         ))}

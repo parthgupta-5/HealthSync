@@ -19,13 +19,13 @@ export default function PatientDashboard() {
       </div>
 
       <div className="flex flex-wrap gap-4 border-b border-gray-200 pb-4">
-        {['overview', 'doctors', 'appointments', 'services'].map(tab => (
+        {['overview', 'doctors', 'appointments', 'services', 'purchases'].map(tab => (
           <button 
             key={tab}
             onClick={() => setActiveView(tab)}
             className={`px-4 py-2 font-medium rounded-lg transition-colors capitalize ${activeView === tab ? 'bg-hospital-red text-white' : 'text-gray-500 hover:bg-gray-100'}`}
           >
-            {tab === 'doctors' ? 'Find a Doctor' : tab === 'appointments' ? 'My Appointments' : tab === 'services' ? 'Medical Services' : 'Overview'}
+            {tab === 'doctors' ? 'Find a Doctor' : tab === 'appointments' ? 'Appointments & History' : tab === 'services' ? 'Medical Services' : tab === 'purchases' ? 'Purchase History' : 'Overview'}
           </button>
         ))}
       </div>
@@ -33,7 +33,8 @@ export default function PatientDashboard() {
       {activeView === 'overview' && <Overview setView={setActiveView} />}
       {activeView === 'doctors' && <FindDoctor user={user} />}
       {activeView === 'appointments' && <MyAppointments userId={user?.uid} />}
-      {activeView === 'services' && <MedicalServices />}
+      {activeView === 'services' && <MedicalServices user={user} />}
+      {activeView === 'purchases' && <MyPurchases userId={user?.uid} />}
     </div>
   );
 }
@@ -202,8 +203,8 @@ function MyAppointments({ userId }) {
       for (const slotDoc of slotSnap.docs) {
         await updateDoc(doc(db, 'slots', slotDoc.id), { isBooked: false });
       }
-      await deleteDoc(doc(db, 'appointments', app.id));
-      setAppointments(prev => prev.filter(a => a.id !== app.id));
+      await updateDoc(doc(db, 'appointments', app.id), { status: 'cancelled' });
+      setAppointments(prev => prev.map(a => a.id === app.id ? { ...a, status: 'cancelled' } : a));
     } catch (err) {
       console.error(err);
     }
@@ -273,10 +274,10 @@ function MyAppointments({ userId }) {
                 )}
               </div>
               <div className="flex items-center gap-4">
-                <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${app.status === 'accepted' ? 'bg-green-100 text-green-700' : app.status === 'rejected' ? 'bg-red-100 text-red-700' : app.status === 'completed' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${app.status === 'accepted' ? 'bg-green-100 text-green-700' : app.status === 'rejected' || app.status === 'cancelled' ? 'bg-red-100 text-red-700' : app.status === 'completed' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
                   {app.status === 'accepted' ? 'In Progress' : app.status}
                 </div>
-                {app.status !== 'completed' && (
+                {(app.status === 'pending' || app.status === 'accepted') && (
                   <div className="flex gap-2">
                     <button onClick={() => handleOpenReschedule(app)} className="text-xs text-hospital-dark hover:text-hospital-red font-medium">Reschedule</button>
                     <button onClick={() => handleUnbook(app)} className="text-xs text-red-500 hover:text-red-700 font-medium bg-red-50 px-2 py-1 rounded">Cancel</button>
@@ -316,7 +317,7 @@ function MyAppointments({ userId }) {
   );
 }
 
-function MedicalServices() {
+function MedicalServices({ user }) {
   const [medicines, setMedicines] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -429,6 +430,16 @@ function MedicalServices() {
         const newStock = item.stock - item.qty;
         await updateDoc(doc(db, 'medicines', item.id), {
           stock: newStock
+        });
+      }
+      if (user?.uid) {
+        await addDoc(collection(db, 'orders'), {
+          patientId: user.uid,
+          patientName: user.name || 'Patient',
+          items: cart,
+          total: cartTotal,
+          date: new Date().toISOString(),
+          status: 'completed'
         });
       }
       setCheckoutStatus('Order placed successfully! Total: ₹' + cartTotal.toFixed(2));
@@ -585,6 +596,70 @@ function MedicalServices() {
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function MyPurchases({ userId }) {
+  const [purchases, setPurchases] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchPurchases() {
+      if (!userId) return;
+      setLoading(true);
+      try {
+        const q = query(collection(db, 'orders'), where('patientId', '==', userId));
+        const snap = await getDocs(q);
+        const data = [];
+        snap.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+        // Sort descending by date
+        data.sort((a,b) => new Date(b.date) - new Date(a.date));
+        setPurchases(data);
+      } catch (err) {
+        console.error("Failed to fetch purchases:", err);
+      }
+      setLoading(false);
+    }
+    fetchPurchases();
+  }, [userId]);
+
+  return (
+    <div className="glass p-6 rounded-2xl">
+      <h2 className="text-xl font-bold mb-4">My Purchase History</h2>
+      {loading ? (
+         <p className="text-gray-500">Loading purchases...</p>
+      ) : purchases.length === 0 ? (
+         <p className="text-gray-500">You haven't made any purchases yet.</p>
+      ) : (
+         <div className="space-y-4">
+           {purchases.map(order => (
+             <div key={order.id} className="p-4 bg-white rounded-lg border border-gray-100 flex flex-col gap-2">
+                <div className="flex justify-between items-start border-b border-gray-50 pb-2">
+                  <div>
+                    <p className="text-xs text-gray-500">Order ID: {order.id}</p>
+                    <p className="text-sm font-semibold text-hospital-dark">
+                      {new Date(order.date).toLocaleDateString()} at {new Date(order.date).toLocaleTimeString()}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold text-hospital-red">₹{order.total.toFixed(2)}</p>
+                    <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded uppercase">Completed</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                  {order.items.map((item, idx) => (
+                    <div key={idx} className="flex gap-2 items-center text-sm">
+                      <span className="font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded w-8 text-center">{item.qty}x</span>
+                      <span className="flex-1 truncate">{item.name}</span>
+                      <span className="text-gray-500">₹{(item.price * item.qty).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+             </div>
+           ))}
+         </div>
       )}
     </div>
   );

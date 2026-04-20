@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-hospital-red: #dc2626;
+  --color-hospital-darkred: #b91c1c;
+  --color-hospital-light: #fef2f2;
+  --color-hospital-white: #ffffff;
+  --color-hospital-gray: #f3f4f6;
+  --color-hospital-dark: #1f2937;
+}
+
+@layer base {
+  body {
+    @apply bg-hospital-gray text-hospital-dark font-sans m-0 p-0;
+  }
+}
+
+.glass {
+  @apply bg-white/70 backdrop-blur-md border border-white/20 shadow-lg;
+}

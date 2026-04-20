@@ -211,6 +211,7 @@ function ManageSlots({ doctorId }) {
     const beMins = timeToMinutes(breakEnd);
 
     try {
+      const promises = [];
       for (let d = new Date(today); d <= endDate; d.setDate(d.getDate() + 1)) {
         // Check if day maps to selected days
         if (!selectedDays.includes(d.getDay())) continue;
@@ -241,17 +242,19 @@ function ManageSlots({ doctorId }) {
            // We could check if slot already exists to prevent duplicates
            const existing = slots.find(s => s.date === dateString && s.time === timeString);
            if (!existing) {
-             await addDoc(collection(db, 'slots'), {
+             promises.push(addDoc(collection(db, 'slots'), {
                doctorId,
                date: dateString,
                time: timeString,
                fee: Number(fee),
                isBooked: false
-             });
+             }));
              generatedCount++;
            }
         }
       }
+      
+      await Promise.all(promises);
       setMessage(`Successfully generated ${generatedCount} new slots.`);
       fetchSlots();
     } catch (err) {

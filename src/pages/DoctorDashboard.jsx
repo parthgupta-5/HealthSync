@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Pencil } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../services/firebase';
-import { collection, getDocs, deleteDoc, updateDoc, doc, query, where, setDoc } from 'firebase/firestore';
+import { collection, getDocs, deleteDoc, updateDoc, doc, query, where, setDoc, onSnapshot } from 'firebase/firestore';
 
 export default function DoctorDashboard() {
   const { user } = useAuth();
@@ -10,6 +10,16 @@ export default function DoctorDashboard() {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState(user?.name || '');
   const [editSpecialization, setEditSpecialization] = useState(user?.specialization || '');
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const q = query(collection(db, 'appointments'), where('doctorId', '==', user.uid), where('status', '==', 'pending'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setPendingCount(snapshot.size);
+    });
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   async function handleUpdateProfile() {
     try {
@@ -59,12 +69,17 @@ export default function DoctorDashboard() {
             onClick={() => setActiveView(tab)}
             className={`px-4 py-2 font-medium rounded-lg transition-colors capitalize ${activeView === tab ? 'bg-hospital-red text-white' : 'text-gray-500 hover:bg-gray-100'}`}
           >
-            {tab === 'slots' ? 'Availability' : tab === 'requests' ? 'Patient Requests' : tab === 'history' ? 'Consultation History' : 'Overview'}
+            {tab === 'slots' ? 'Availability' : tab === 'requests' ? (
+              <span className="flex items-center gap-2">
+                Patient Requests
+                {pendingCount > 0 && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">{pendingCount}</span>}
+              </span>
+            ) : tab === 'history' ? 'Consultation History' : 'Overview'}
           </button>
         ))}
       </div>
 
-      {activeView === 'overview' && <Overview setView={setActiveView} />}
+      {activeView === 'overview' && <Overview setView={setActiveView} pendingCount={pendingCount} />}
       {activeView === 'slots' && <AvailabilitySettings doctorId={user?.uid} user={user} />}
       {activeView === 'requests' && <PatientRequests doctorId={user?.uid} />}
       {activeView === 'history' && <ConsultationHistory doctorId={user?.uid} />}
@@ -72,7 +87,7 @@ export default function DoctorDashboard() {
   );
 }
 
-function Overview({ setView }) {
+function Overview({ setView, pendingCount }) {
   return (
     <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
       <DashboardCard 
@@ -86,6 +101,7 @@ function Overview({ setView }) {
         desc="Review pending appointment requests from patients." 
         action="View Requests"
         onClick={() => setView('requests')}
+        badge={pendingCount > 0 ? pendingCount : null}
       />
       <DashboardCard 
         title="Consultation History" 
@@ -97,9 +113,14 @@ function Overview({ setView }) {
   );
 }
 
-function DashboardCard({ title, desc, action, onClick }) {
+function DashboardCard({ title, desc, action, onClick, badge }) {
   return (
-    <div className="glass p-6 rounded-2xl flex flex-col justify-between hover:shadow-lg transition-transform hover:-translate-y-1">
+    <div className="glass p-6 rounded-2xl flex flex-col justify-between hover:shadow-lg transition-transform hover:-translate-y-1 relative">
+      {badge && (
+        <div className="absolute top-4 right-4 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shadow-md">
+          {badge}
+        </div>
+      )}
       <div>
         <h3 className="text-xl font-bold mb-2">{title}</h3>
         <p className="text-gray-500 mb-6">{desc}</p>
@@ -287,26 +308,61 @@ function PatientRequests({ doctorId }) {
     }
   }
 
+  async function handleCancel(app) {
+    try {
+      await updateDoc(doc(db, 'appointments', app.id), { status: 'cancelled' });
+      fetchRequests();
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleComplete(app) {
+    const defaultDiagnosis = "General Consultation";
+    const diagnosis = window.prompt("Enter Diagnosis for the patient:", defaultDiagnosis) || defaultDiagnosis;
+    const prescription = window.prompt("Enter Prescription (optional):") || "No prescription needed.";
+
+    try {
+      await updateDoc(doc(db, 'appointments', app.id), { 
+        status: 'completed',
+        diagnosis,
+        prescription
+      });
+      fetchRequests();
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
   return (
     <div className="glass p-6 rounded-2xl">
-      <h2 className="text-xl font-bold mb-4">Pending Requests</h2>
+      <h2 className="text-xl font-bold mb-4">Patient Requests & Active Appointments</h2>
       <div className="space-y-4">
         {requests.map(req => (
-          <div key={req.id} className="p-4 bg-white rounded-lg border border-gray-100 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-            <div>
-              <p className="font-bold text-hospital-dark">{req.patientName}</p>
-              <p className="text-sm text-gray-600">Requested Slot: {req.date} at {req.time}</p>
-              <p className="text-xs font-semibold mt-1">Status: <span className={req.status === 'pending' ? 'text-orange-500' : req.status === 'accepted' ? 'text-green-500' : 'text-red-500'}>{req.status.toUpperCase()}</span></p>
+          <div key={req.id} className="p-4 bg-white rounded-lg border border-gray-100 flex flex-col justify-between gap-4">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+              <div>
+                <p className="font-bold text-hospital-dark">{req.patientName}</p>
+                <p className="text-sm text-gray-600">Consultation Slot: {req.date} at {req.time}</p>
+                <p className="text-xs font-semibold mt-1">Status: <span className={req.status === 'pending' ? 'text-orange-500' : req.status === 'accepted' ? 'text-green-500' : 'text-red-500'}>{req.status === 'accepted' ? 'IN PROGRESS' : req.status.toUpperCase()}</span></p>
+              </div>
+              {req.status === 'pending' && (
+                <div className="flex gap-2">
+                  <button onClick={() => handleStatusUpdate(req.id, 'accepted', req)} className="bg-hospital-red text-white px-4 py-2 rounded-lg text-sm hover:bg-hospital-darkred focus:outline-none">Accept</button>
+                  <button onClick={() => handleStatusUpdate(req.id, 'rejected', req)} className="bg-gray-100 text-hospital-dark px-4 py-2 rounded-lg text-sm hover:bg-gray-200 focus:outline-none">Reject</button>
+                </div>
+              )}
             </div>
-            {req.status === 'pending' && (
-              <div className="flex gap-2">
-                <button onClick={() => handleStatusUpdate(req.id, 'accepted', req)} className="bg-hospital-red text-white px-4 py-2 rounded-lg text-sm hover:bg-hospital-darkred">Accept</button>
-                <button onClick={() => handleStatusUpdate(req.id, 'rejected', req)} className="bg-gray-100 text-hospital-dark px-4 py-2 rounded-lg text-sm hover:bg-gray-200">Reject</button>
+            
+            {req.status === 'accepted' && (
+              <div className="mt-2 pt-3 border-t border-gray-50 flex flex-wrap gap-2">
+                <button onClick={() => handleComplete(req)} className="text-xs bg-hospital-dark text-white px-3 py-1.5 rounded hover:bg-hospital-red">Mark Completed</button>
+                <button onClick={() => handleCancel(req)} className="text-xs bg-red-50 text-red-600 px-3 py-1.5 rounded hover:bg-red-100 font-medium border border-red-100">Cancel Appointment</button>
               </div>
             )}
           </div>
         ))}
-        {requests.length === 0 && <p className="text-gray-500">No requests found.</p>}
+        {requests.length === 0 && <p className="text-gray-500">No active or pending requests found.</p>}
       </div>
     </div>
   );
@@ -326,37 +382,11 @@ function ConsultationHistory({ doctorId }) {
     const data = [];
     querySnapshot.forEach((doc) => {
       const app = { id: doc.id, ...doc.data() };
-      if (['accepted', 'completed', 'cancelled', 'rejected'].includes(app.status)) {
+      if (['completed', 'cancelled', 'rejected'].includes(app.status)) {
         data.push(app);
       }
     });
     setHistory(data.sort((a,b) => new Date(b.date) - new Date(a.date)));
-  }
-
-  async function handleCancel(app) {
-    try {
-      await updateDoc(doc(db, 'appointments', app.id), { status: 'cancelled' });
-      fetchHistory();
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  async function handleComplete(app) {
-    const defaultDiagnosis = "General Consultation";
-    const diagnosis = window.prompt("Enter Diagnosis for the patient:", defaultDiagnosis) || defaultDiagnosis;
-    const prescription = window.prompt("Enter Prescription (optional):") || "No prescription needed.";
-
-    try {
-      await updateDoc(doc(db, 'appointments', app.id), { 
-        status: 'completed',
-        diagnosis,
-        prescription
-      });
-      fetchHistory();
-    } catch (err) {
-      console.error(err);
-    }
   }
 
   return (
@@ -364,21 +394,15 @@ function ConsultationHistory({ doctorId }) {
       <h2 className="text-xl font-bold mb-4">Consultation History</h2>
       <div className="space-y-4">
         {history.map(app => (
-          <div key={app.id} className={`p-4 bg-white rounded-lg border-l-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 ${app.status === 'completed' ? 'border-l-blue-500 border-gray-200' : ['cancelled', 'rejected'].includes(app.status) ? 'border-l-red-500 border-red-100 opacity-80' : 'border-l-green-500 border-green-200'}`}>
+          <div key={app.id} className={`p-4 bg-white rounded-lg border-l-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 ${app.status === 'completed' ? 'border-l-blue-500 border-gray-200' : 'border-l-red-500 border-red-100 opacity-80'}`}>
             <div>
               <p className="font-bold text-hospital-dark">{app.patientName}</p>
               <p className="text-sm text-gray-600">Consultation Slot: {app.date} at {app.time}</p>
-              <p className={`text-xs font-semibold mt-1 uppercase ${['cancelled', 'rejected'].includes(app.status) ? 'text-red-600' : app.status === 'completed' ? 'text-blue-600' : 'text-green-600'}`}>{app.status === 'accepted' ? 'In Progress' : app.status}</p>
+              <p className={`text-xs font-semibold mt-1 uppercase ${['cancelled', 'rejected'].includes(app.status) ? 'text-red-600' : 'text-blue-600'}`}>{app.status}</p>
               {app.status === 'completed' && app.diagnosis && (
                 <div className="mt-2 bg-gray-50 p-3 rounded-lg text-sm border border-gray-100">
                   <p className="mb-1"><span className="font-semibold text-hospital-dark">Diagnosis:</span> {app.diagnosis}</p>
                   <p><span className="font-semibold text-hospital-dark">Prescription:</span> {app.prescription}</p>
-                </div>
-              )}
-              {app.status === 'accepted' && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button onClick={() => handleComplete(app)} className="text-xs bg-hospital-dark text-white px-3 py-1.5 rounded hover:bg-hospital-red">Mark Completed</button>
-                  <button onClick={() => handleCancel(app)} className="text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded hover:bg-red-200 font-medium">Cancel Appointment</button>
                 </div>
               )}
             </div>

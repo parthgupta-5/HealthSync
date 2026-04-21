@@ -62,27 +62,10 @@ Our project strictly follows separation of concerns:
 
 ---
 
-## 🚦 Local Setup Instructions
+## 🔗 Project Links
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/parthgupta-5/HealthSync
-   ```
-2. **Navigate to the project directory:**
-   ```bash
-   cd hospital-booking-app
-   ```
-3. **Install Dependencies:**
-   ```bash
-   npm install
-   ```
-4. **Configure Firebase Environment Check:**
-   - Ensure your `.env` file (if applicable) contains the correct Firebase config keys, or that they are properly exported in `services/firebase.js`.
-5. **Run the Development Server:**
-   ```bash
-   npm run dev
-   ```
-6. Visit `localhost:5173` to view the application.
+*   **🌐 Live Project (Vercel):** [HealthSync Live on Vercel](https://health-sync-sandy-three.vercel.app/)
+*   **🎥 Video Demo & Documentation:** [Google Drive Folder](https://drive.google.com/drive/folders/1nd3-jzoxH5ssiOimkDW17gQgV_pZWvyI?usp=sharing) (Contains a detailed 3-5 minute video walkthrough and project description document).
 
 ---
 

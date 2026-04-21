@@ -9,14 +9,14 @@ In today's fast-paced world, managing hospital appointments can be chaotic for b
 
 ## 🚀 Key Features
 
-### 👤 Role-Based Access Control (RBAC)
+### Role-Based Access Control (RBAC)
 - **Patients:** Can browse doctors by specialization, view dynamic availability slots, book appointments, and view their medical consultation history.
 - **Doctors:** Have a dedicated dashboard to set recurring weekly availability, define slot durations/fees, accept/reject incoming requests, and add post-consultation medical notes (diagnosis and prescriptions).
 
-### 📅 Dynamic Scheduling Engine
+### Dynamic Scheduling Engine
 - Unlike systems with static bulk-generation, our app calculates available slots dynamically by merging a doctor's baseline weekly schedule with their currently active appointments, ensuring zero double-bookings.
 
-### 📄 Digital Records
+### Digital Records
 - End-to-end flow from pending request -> accepted IN PROGRESS appointment -> Completed appointment with attached medical diagnosis and prescription records.
 
 ---
@@ -64,8 +64,9 @@ Our project strictly follows separation of concerns:
 
 ## 🔗 Project Links
 
-*   **🌐 Live Project (Vercel):** [HealthSync Live on Vercel](https://health-sync-sandy-three.vercel.app/)
-*   **🎥 Video Demo & Documentation:** [Google Drive Folder](https://drive.google.com/drive/folders/1nd3-jzoxH5ssiOimkDW17gQgV_pZWvyI?usp=sharing) (Contains a detailed 3-5 minute video walkthrough and project description document).
+*   **Live Project:** https://health-sync-sandy-three.vercel.app/
+*   **Video Demo & Documentation:** https://drive.google.com/drive/folders/1nd3-jzoxH5ssiOimkDW17gQgV_pZWvyI?usp=sharing 
+(Contains a detailed video walkthrough and project description document).
 
 ---
 

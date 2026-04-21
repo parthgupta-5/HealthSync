@@ -66,7 +66,7 @@ Our project strictly follows separation of concerns:
 
 1. **Clone the repository:**
    ```bash
-   git clone <your-repo-link>
+   git clone https://github.com/parthgupta-5/HealthSync
    ```
 2. **Navigate to the project directory:**
    ```bash
@@ -86,4 +86,4 @@ Our project strictly follows separation of concerns:
 
 ---
 
-> **Note to Evaluator:** This application focuses not just on building features, but on building them *correctly*. The integration of `useMemo`, `useCallback`, `useRef`, and `React.lazy()` demonstrates a conscious effort towards application architecture, memory management, and browser rendering optimization.
+> This application focuses not just on building features, but on building them *correctly*. The integration of `useMemo`, `useCallback`, `useRef`, and `React.lazy()` demonstrates a conscious effort towards application architecture, memory management, and browser rendering optimization.

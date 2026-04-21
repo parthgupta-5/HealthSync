@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Pencil } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../services/firebase';
@@ -11,6 +11,13 @@ export default function DoctorDashboard() {
   const [editName, setEditName] = useState(user?.name || '');
   const [editSpecialization, setEditSpecialization] = useState(user?.specialization || '');
   const [pendingCount, setPendingCount] = useState(0);
+  const nameInputRef = useRef(null);
+
+  useEffect(() => {
+    if (isEditingProfile && nameInputRef.current) {
+      nameInputRef.current.focus();
+    }
+  }, [isEditingProfile]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -40,7 +47,7 @@ export default function DoctorDashboard() {
         <div className="text-sm bg-white px-4 py-2 rounded-full shadow-sm border border-gray-100 flex items-center gap-2">
           {isEditingProfile ? (
             <div className="flex gap-2 items-center">
-              <input value={editName} onChange={e=>setEditName(e.target.value)} className="border border-gray-300 px-2 py-1 rounded text-sm w-full max-w-[120px] focus:outline-none focus:border-hospital-red" placeholder="Name" />
+              <input ref={nameInputRef} value={editName} onChange={e=>setEditName(e.target.value)} className="border border-gray-300 px-2 py-1 rounded text-sm w-full max-w-[120px] focus:outline-none focus:border-hospital-red" placeholder="Name" />
               <select value={editSpecialization} onChange={e=>setEditSpecialization(e.target.value)} className="border border-gray-300 px-2 py-1 rounded text-sm w-full max-w-[150px] focus:outline-none focus:border-hospital-red bg-white">
                 <option value="" disabled>Specialization</option>
                 {['General Physician', 'Cardiologist', 'Dermatologist', 'Pediatrician', 'Neurologist', 'Psychiatrist', 'Orthopedic Surgeon', 'Gynecologist', 'Dentist', 'ENT Specialist'].map(spec => (
@@ -279,11 +286,7 @@ function AvailabilitySettings({ doctorId, user }) {
 function PatientRequests({ doctorId }) {
   const [requests, setRequests] = useState([]);
 
-  useEffect(() => {
-    fetchRequests();
-  }, [doctorId]);
-
-  async function fetchRequests() {
+  const fetchRequests = useCallback(async () => {
     if (!doctorId) return;
     const q = query(collection(db, 'appointments'), where('doctorId', '==', doctorId));
     const querySnapshot = await getDocs(q);
@@ -295,7 +298,11 @@ function PatientRequests({ doctorId }) {
       }
     });
     setRequests(data);
-  }
+  }, [doctorId]);
+
+  useEffect(() => {
+    fetchRequests();
+  }, [fetchRequests]);
 
   async function handleStatusUpdate(id, newStatus, req) {
     try {
@@ -371,11 +378,7 @@ function PatientRequests({ doctorId }) {
 function ConsultationHistory({ doctorId }) {
   const [history, setHistory] = useState([]);
 
-  useEffect(() => {
-    fetchHistory();
-  }, [doctorId]);
-
-  async function fetchHistory() {
+  const fetchHistory = useCallback(async () => {
     if (!doctorId) return;
     const q = query(collection(db, 'appointments'), where('doctorId', '==', doctorId));
     const querySnapshot = await getDocs(q);
@@ -386,14 +389,22 @@ function ConsultationHistory({ doctorId }) {
         data.push(app);
       }
     });
-    setHistory(data.sort((a,b) => new Date(b.date) - new Date(a.date)));
-  }
+    setHistory(data);
+  }, [doctorId]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  const sortedHistory = useMemo(() => {
+    return [...history].sort((a,b) => new Date(b.date) - new Date(a.date));
+  }, [history]);
 
   return (
     <div className="glass p-6 rounded-2xl">
       <h2 className="text-xl font-bold mb-4">Consultation History</h2>
       <div className="space-y-4">
-        {history.map(app => (
+        {sortedHistory.map(app => (
           <div key={app.id} className={`p-4 bg-white rounded-lg border-l-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 ${app.status === 'completed' ? 'border-l-blue-500 border-gray-200' : 'border-l-red-500 border-red-100 opacity-80'}`}>
             <div>
               <p className="font-bold text-hospital-dark">{app.patientName}</p>
@@ -412,7 +423,7 @@ function ConsultationHistory({ doctorId }) {
             </div>
           </div>
         ))}
-        {history.length === 0 && <p className="text-gray-500">No consultation history available yet.</p>}
+        {sortedHistory.length === 0 && <p className="text-gray-500">No consultation history available yet.</p>}
       </div>
     </div>
   );
